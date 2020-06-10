@@ -1,0 +1,11 @@
+{
+  "name": "simple-bios",
+  "version": "1.0.0",
+  "license": "MIT",
+  "devDependencies": {
+    "luamin": "^1.0.4"
+  },
+  "scripts": {
+    "build": "luamin -f code.lua > code.min.lua"
+  }
+}

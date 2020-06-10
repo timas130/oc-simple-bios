@@ -1,0 +1,6 @@
+# Because I use OCEmu
+data.bin
+label.txt
+
+node_modules/
+yarn.lock
