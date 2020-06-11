@@ -188,7 +188,7 @@ while true do
     if d == "internet" then
       setStatus("Downloading recovery module...")
       -- TODO: Change localhost URL
-      local result = invoke(component.list("internet", true)(), "request", "http://localhost/recovery.lua").read()
+      local result = invoke(component.list("internet", true)(), "request", "https://raw.githubusercontent.com/timas130/oc-simple-bios/master/recovery.lua").read()
       -- if not reuslt then
       --   setStatus("Failed to download recovery tools, check the connection?")
       --   goto skip
