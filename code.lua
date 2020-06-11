@@ -9,16 +9,20 @@ local function invoke(address, method, ...)
   end
 end
 
+function waitForCtrl(timeout)
+  local deadline = computer.uptime() + timeout
+  repeat
+    local name, _, _, code = computer.pullSignal(deadline - computer.uptime())
+    -- Right Ctrl or Left Ctrl \
+    if name == "key_down" and (code == 0x1D or code == 0x9D) then
+      return true
+    end
+  until computer.uptime() >= deadline
+  return false
+end
+
 local floor = math.floor
 local gpu, screen = component.list("gpu", true)(), component.list("screen", true)()
-
--- Shamelessly copied from OpenOS ¯\_(ツ)_/¯
-function sleep(timeout)
-  local deadline = computer.uptime() + (timeout or 0)
-  repeat
-    computer.pullSignal(deadline - computer.uptime())
-  until computer.uptime() >= deadline
-end
 
 -- For compatibility
 local eeprom = component.list("eeprom", true)()
@@ -43,6 +47,9 @@ function boot(d)
   if not status then
     invoke(gpu, "setForeground", 0xFF0000)
     invoke(gpu, "set", 1, 1, value)
+    while true do -- Time to see the error
+      computer.pullSignal()
+    end
   else
     invoke(gpu, "setForeground", 0x00FF00)
     invoke(gpu, "set", 1, 1, "Program completed.")
@@ -60,10 +67,23 @@ invoke(gpu, "setResolution", w, h)
 invoke(gpu, "setForeground", primaryColor)
 invoke(gpu, "setBackground", background)
 invoke(gpu, "fill", 1, 1, w, h, " ")
+local pressCtrl = "Press Ctrl to enter boot menu"
+invoke(gpu, "set", floor(w / 2 - unicode.len(pressCtrl) / 2), 4, pressCtrl)
+
+if not waitForCtrl(1) then
+  boot(computer.getBootAddress())
+else
+  invoke(gpu, "fill", 1, 1, w, h, " ")
+end
+
+function setStatus(msg)
+  invoke(gpu, "fill", 4, h - 2, w - 4, 1, " ")
+  invoke(gpu, "set", 4, h - 2, msg)
+end
 
 -- Drawing welcome/title text at the top of the screen
-local welcomeMessage = "Simple BIOS 1.0"
-invoke(gpu, "set", floor(w / 2 - #welcomeMessage / 2), 3, welcomeMessage)
+local welcomeMessage = "Simple BIOS 1.1"
+invoke(gpu, "set", floor(w / 2 - unicode.len(welcomeMessage) / 2), 3, welcomeMessage)
 
 local drives
 local maxLabel = nil
@@ -77,7 +97,7 @@ function drawDrives()
 
   drives = component.list("filesystem", true)
   for i in drives do
-    local label = string.len(invoke(i, "getLabel"))
+    local label = unicode.len(invoke(i, "getLabel"))
     if not maxLabel or label > maxLabel then
       maxLabel = label
     end
@@ -106,13 +126,20 @@ function drawDrives()
       invoke(gpu, "set", maxLabel + 8, drawNext, "Loadable")
     end
 
-    invoke(gpu, "set", w - string.len(renameText) - 1, drawNext, renameText)
+    invoke(gpu, "set", w - unicode.len(renameText) - 1, drawNext, renameText)
 
     y2drive[drawNext] = i
 
     drawNext = drawNext + 2
 
     ::dskip::
+  end
+
+  drawNext = drawNext + 1
+
+  if component.list("internet", true)() then
+    invoke(gpu, "set", 4, drawNext, " Download recovery tools ")
+    y2drive[drawNext] = "internet"
   end
 end
 
@@ -123,8 +150,7 @@ local renameMessage = "New name, empty to reset: "
 function renameDrive(address)
   invoke(gpu, "setBackground", background)
   invoke(gpu, "setForeground", primaryColor)
-  invoke(gpu, "fill", 4, h - 2, w - 4, 1, " ")
-  invoke(gpu, "set", 4, h - 2, renameMessage)
+  setStatus(renameMessage)
   renameAddress = address
   renameInput = true
   renameLabel = ""
@@ -132,14 +158,12 @@ end
 
 drawDrives()
 
-local deadline = computer.uptime() + 5
 while true do
-  local name, c, x, y = computer.pullSignal(deadline - computer.uptime())
+  local name,c,x,y = computer.pullSignal()
   if name == "key_down" and renameInput then
     if y == 0x0E then -- Backspace
-      renameLabel = renameLabel:sub(1, -2)
-      invoke(gpu, "fill", 4, h - 2, w - 4, 1, " ")
-      invoke(gpu, "set", 4, h - 2, renameMessage .. renameLabel)
+      renameLabel = unicode.sub(renameLabel, 1, -2)
+      setStatus(renameMessage .. renameLabel)
     elseif y == 0x1C then -- Enter
       renameInput = false
       if string.len(renameLabel) == 0 then
@@ -151,14 +175,27 @@ while true do
       invoke(gpu, "fill", 4, h - 2, w - 4, 1, " ")
       drawDrives()
     elseif string.len(renameLabel) < 16 and x ~= 0 then
-      renameLabel = renameLabel .. string.char(x)
-      invoke(gpu, "fill", 4, h - 2, w - 4, 1, " ")
-      invoke(gpu, "set", 4, h - 2, renameMessage .. renameLabel)
+      renameLabel = renameLabel .. unicode.char(x)
+      setStatus(renameMessage .. renameLabel)
     end
   elseif name == "touch" then
     deadline = math.huge
     local d = y2drive[y]
     if not d then
+      goto skip
+    end
+
+    if d == "internet" then
+      setStatus("Downloading recovery module...")
+      -- TODO: Change localhost URL
+      local result = invoke(component.list("internet", true)(), "request", "http://localhost/recovery.lua").read()
+      -- if not reuslt then
+      --   setStatus("Failed to download recovery tools, check the connection?")
+      --   goto skip
+      -- end
+      load(result, "=recovery.lua", "bt", _G)()
+      waitForCtrl(5)
+      drawDrives()
       goto skip
     end
 
@@ -168,17 +205,11 @@ while true do
     end
 
     if invoke(d, "exists", "init.lua") then
-      invoke(gpu, "fill", 4, h - 2, w - 4, 1, " ")
-      invoke(gpu, "set", 4, h - 2, "Loading from this device...")
+      setStatus("Loading from this device...")
       boot(d)
     else
-      invoke(gpu, "fill", 4, h - 2, w - 4, 1, " ")
-      invoke(gpu, "set", 4, h - 2, "This device is not loadable, init.lua missing!")
+      setStatus("This device is not loadable, init.lua missing!")
     end
-  end
-  if computer.uptime() >= deadline then
-    -- Booting into default drive
-    boot(computer.getBootAddress())
   end
   ::skip::
 end
